@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Contract } from 'ethers';
 import { useAccount, useReadContract } from 'wagmi';
+import { isAddress, type Address } from 'viem';
 
 import { useEthersSigner } from '../hooks/useEthersSigner';
 import { useZamaInstance } from '../hooks/useZamaInstance';
@@ -24,7 +25,7 @@ export function GameApp() {
   const { instance, isLoading: isZamaLoading, error: zamaError } = useZamaInstance();
   const signerPromise = useEthersSigner();
 
-  const [activeContractAddress, setActiveContractAddress] = useState(CONTRACT_ADDRESS);
+  const [activeContractAddress, setActiveContractAddress] = useState(CONTRACT_ADDRESS.trim());
   const [addressInput, setAddressInput] = useState(CONTRACT_ADDRESS);
   const [secretValue, setSecretValue] = useState<number | null>(null);
   const [guessInput, setGuessInput] = useState('');
@@ -34,12 +35,18 @@ export function GameApp() {
   const [isDecryptingSecret, setIsDecryptingSecret] = useState(false);
   const [isDecryptingResult, setIsDecryptingResult] = useState(false);
 
-  const isContractConfigured = useMemo(() => {
-    return /^0x[a-fA-F0-9]{40}$/.test(activeContractAddress) && activeContractAddress !== ZERO_ADDRESS;
+  const normalizedContractAddress = useMemo<Address | undefined>(() => {
+    const normalized = activeContractAddress.trim();
+    if (!isAddress(normalized) || normalized === ZERO_ADDRESS) {
+      return undefined;
+    }
+    return normalized as Address;
   }, [activeContractAddress]);
 
+  const isContractConfigured = Boolean(normalizedContractAddress);
+
   const hasActiveGameQuery = useReadContract({
-    address: isContractConfigured ? activeContractAddress : undefined,
+    address: normalizedContractAddress,
     abi: CONTRACT_ABI,
     functionName: 'hasActiveGame',
     args: address ? [address] : undefined,
@@ -49,7 +56,7 @@ export function GameApp() {
   });
 
   const hasResultQuery = useReadContract({
-    address: isContractConfigured ? activeContractAddress : undefined,
+    address: normalizedContractAddress,
     abi: CONTRACT_ABI,
     functionName: 'hasResult',
     args: address ? [address] : undefined,
@@ -59,7 +66,7 @@ export function GameApp() {
   });
 
   const encryptedSecretQuery = useReadContract({
-    address: isContractConfigured ? activeContractAddress : undefined,
+    address: normalizedContractAddress,
     abi: CONTRACT_ABI,
     functionName: 'getEncryptedSecret',
     args: address ? [address] : undefined,
@@ -69,7 +76,7 @@ export function GameApp() {
   });
 
   const encryptedResultQuery = useReadContract({
-    address: isContractConfigured ? activeContractAddress : undefined,
+    address: normalizedContractAddress,
     abi: CONTRACT_ABI,
     functionName: 'getEncryptedResult',
     args: address ? [address] : undefined,
@@ -111,11 +118,11 @@ export function GameApp() {
   }, [secretValue]);
 
   const addressPreview = useMemo(() => {
-    if (!isContractConfigured) {
+    if (!normalizedContractAddress) {
       return 'Not configured';
     }
-    return `${activeContractAddress.slice(0, 6)}...${activeContractAddress.slice(-4)}`;
-  }, [activeContractAddress, isContractConfigured]);
+    return `${normalizedContractAddress.slice(0, 6)}...${normalizedContractAddress.slice(-4)}`;
+  }, [normalizedContractAddress]);
 
   useEffect(() => {
     if (guessComplement !== '') {
@@ -124,7 +131,7 @@ export function GameApp() {
   }, [guessComplement]);
 
   const resetQueries = async () => {
-    if (!isContractConfigured) {
+    if (!normalizedContractAddress) {
       return;
     }
 
@@ -139,7 +146,7 @@ export function GameApp() {
   const handleApplyContractAddress = () => {
     const normalized = addressInput.trim();
 
-    if (!/^0x[a-fA-F0-9]{40}$/.test(normalized) || normalized === ZERO_ADDRESS) {
+    if (!isAddress(normalized) || normalized === ZERO_ADDRESS) {
       setStatusMessage('Enter a valid deployed contract address on Sepolia.');
       return;
     }
@@ -152,14 +159,15 @@ export function GameApp() {
   };
 
   const decryptHandle = async (handle: string, target: DecryptionTarget): Promise<number> => {
-    if (!instance || !address || !signerPromise || !isContractConfigured) {
+    const contractAddress = normalizedContractAddress;
+    if (!instance || !address || !signerPromise || !contractAddress) {
       throw new Error('Missing FHE prerequisites');
     }
 
     const keypair = instance.generateKeypair();
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const durationDays = '10';
-    const contracts = [activeContractAddress];
+    const contracts = [contractAddress];
     const eip712 = instance.createEIP712(keypair.publicKey, contracts, timestamp, durationDays);
 
     const signer = await signerPromise;
@@ -177,7 +185,7 @@ export function GameApp() {
       [
         {
           handle,
-          contractAddress: activeContractAddress,
+          contractAddress,
         },
       ],
       keypair.privateKey,
@@ -198,7 +206,8 @@ export function GameApp() {
   };
 
   const handleStartGame = async () => {
-    if (!isContractConfigured) {
+    const contractAddress = normalizedContractAddress;
+    if (!contractAddress) {
       setStatusMessage('Set the game contract address before starting.');
       return;
     }
@@ -217,7 +226,7 @@ export function GameApp() {
         throw new Error('Wallet signer unavailable');
       }
 
-      const contract = new Contract(activeContractAddress, CONTRACT_ABI, signer);
+      const contract = new Contract(contractAddress, CONTRACT_ABI, signer);
       const tx = await contract.startGame();
       await tx.wait();
 
@@ -235,7 +244,8 @@ export function GameApp() {
   };
 
   const handleDecryptSecret = async () => {
-    if (!isContractConfigured) {
+    const contractAddress = normalizedContractAddress;
+    if (!contractAddress) {
       setStatusMessage('Set the game contract address before decrypting.');
       return;
     }
@@ -267,7 +277,8 @@ export function GameApp() {
   };
 
   const handleSubmitGuess = async () => {
-    if (!isContractConfigured) {
+    const contractAddress = normalizedContractAddress;
+    if (!contractAddress) {
       setStatusMessage('Set the game contract address before submitting.');
       return;
     }
@@ -287,7 +298,7 @@ export function GameApp() {
       setIsSubmitting(true);
       setStatusMessage('Encrypting your answer and submitting...');
 
-      const inputBuffer = instance.createEncryptedInput(activeContractAddress, address);
+      const inputBuffer = instance.createEncryptedInput(contractAddress, address);
       inputBuffer.add8(parsedGuess);
       const encryptedInput = await inputBuffer.encrypt();
 
@@ -296,7 +307,7 @@ export function GameApp() {
         throw new Error('Wallet signer unavailable');
       }
 
-      const contract = new Contract(activeContractAddress, CONTRACT_ABI, signer);
+      const contract = new Contract(contractAddress, CONTRACT_ABI, signer);
       const tx = await contract.submitEncryptedGuess(
         encryptedInput.handles[0],
         encryptedInput.inputProof
@@ -316,7 +327,8 @@ export function GameApp() {
   };
 
   const handleDecryptResult = async () => {
-    if (!isContractConfigured) {
+    const contractAddress = normalizedContractAddress;
+    if (!contractAddress) {
       setStatusMessage('Set the game contract address before decrypting results.');
       return;
     }
